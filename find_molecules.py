@@ -1,6 +1,12 @@
 from collections import deque
-import numpy as np
-import sys
+import sys, copy
+
+def flatten(L):
+    for item in L:
+        try:
+            yield from flatten(item)
+        except TypeError:
+            yield item
 
 def get_data(filename):
     file = open(filename, "r")
@@ -51,6 +57,7 @@ def get_data(filename):
     return results_dict
 
 def dist(atom1, atom2, box):
+#    print(atom1, atom2)
     x = abs(atom1[0] - atom2[0])
     x = (box[0] - x) if (x > box[0]/2) else x
     
@@ -59,6 +66,7 @@ def dist(atom1, atom2, box):
     
     z = abs(atom1[2] - atom2[2])
     z = (box[2] - z) if (z > box[2]/2) else z
+#    print(x, y, z)
 
     return (x**2 + y**2 + z**2)**(0.5)
     
@@ -72,7 +80,11 @@ def read_input():
         print(f"Enter the types of atoms in the molecule {i+1}. When done enter 0")
         done = False
         while not done:
-            answ = int(input("Type: "))
+            str_input = input("Type: ")
+            try:
+                answ = int(str_input)
+            except:
+                answ = list(map(int, str_input.split()))
             if answ == 0:
                 done = True
                 print(f"Molecule {i+1}: {molecules[i]}")
@@ -83,17 +95,18 @@ def read_input():
 
         print("Provide pair cutoff distances")
 
-        molecule_types_num = len(molecules[i]) - 1 
+        flat_molecule = list(flatten(molecules[i]))
+        molecule_types_num = len(flat_molecule) - 1 
         for k in range(molecule_types_num):
-            if molecules[i][k] not in cutoffs:
-                cutoffs[molecules[i][k]] = dict()
+            if flat_molecule[k] not in cutoffs:
+                cutoffs[flat_molecule[k]] = dict()
             for j in range(k + 1, molecule_types_num):
-                if molecules[i][k] != molecules[i][j]:
-                    if molecules[i][j] not in cutoffs[molecules[i][k]]:
-                        cutoffs[molecules[i][k]][molecules[i][j]] = float(input(f"type pair {molecules[i][k]}-{molecules[i][j]}: "))
-                    if molecules[i][j] not in cutoffs:
-                        cutoffs[molecules[i][j]] = dict()
-                    cutoffs[molecules[i][j]][molecules[i][k]] = cutoffs[molecules[i][k]][molecules[i][j]]
+                if flat_molecule[k] != flat_molecule[j]:
+                    if flat_molecule[j] not in cutoffs[flat_molecule[k]]:
+                        cutoffs[flat_molecule[k]][flat_molecule[j]] = float(input(f"type pair {flat_molecule[k]}-{flat_molecule[j]}: "))
+                    if flat_molecule[j] not in cutoffs:
+                        cutoffs[flat_molecule[j]] = dict()
+                    cutoffs[flat_molecule[j]][flat_molecule[k]] = cutoffs[flat_molecule[k]][flat_molecule[j]]
         cutoffs_list.append(cutoffs)
 
 
@@ -107,54 +120,133 @@ def get_molecules_ids(to_leave, atom_data):
         copy_atoms = atom_data["atoms"].copy()
         for line in atom_data["atoms"]:
             if line[atom_data["type"]] in molecule:
-                molecule_found =find_molecule(molecule, line, atom_data, to_leave["cutoffs"][i], copy_atoms, chain) 
+                molecule_found = find_molecule(copy.deepcopy(molecule), line, atom_data, to_leave["cutoffs"][i], copy_atoms, chain) 
                 ids_toleave += molecule_found["ids"]
+                if molecule_found["ids"]:
+                    print(f"Found molecule: {molecule_found['ids']} !!!")
                 copy_atoms = molecule_found["copy_atoms"].copy()
 
     return [*set(ids_toleave)]
+"""
+def find_neighbor(atom_coords, source_type, target_type, atom_data, copy_atoms, exclude, cutoffs):
+        closest = find_closest(atom_coords, atom_data, target_type, copy_atoms, exclude)
+#        print(f"Closest atom to type {source_type} is: ", closest)
+        if closest:
+            closest_coords = (closest[atom_data["x"]], closest[atom_data["y"]], closest[atom_data["z"]])
+            distance_between = dist(atom_coords, closest_coords, atom_data["box"])
+#            print("Distance between them: ", distance_between)
+            if distance_between > cutoffs[source_type][target_type]:
+                return False
+            else:
+                exclude.append(closest[atom_data["id"]])
+                return {"id": closest[atom_data["id"]], "coords":closest_coords}
+        else:
+            return False
+"""
+def find_neighbor(atom_coords, source_type, target_type, atom_data, copy_atoms, exclude, cutoffs):
+    done = False
+    result = list()
+    while not done:
+        closest = find_closest(atom_coords, atom_data, target_type, copy_atoms, exclude)
+        if closest:
+            closest_coords = (closest[atom_data["x"]], closest[atom_data["y"]], closest[atom_data["z"]])
+            distance_between = dist(atom_coords, closest_coords, atom_data["box"])
+            if distance_between <= cutoffs[source_type][target_type]:
+                result.append({"id": closest[atom_data["id"]], "coords":closest_coords})
+        else:
+            return []
+
     
-def find_molecule(molecule, atom, atom_data, cutoffs, copy_atoms, chain):
+def find_molecule(molecule, atom, atom_data, cutoffs, copy_atoms, chain, exclude = "def"):
+    print_condition = True if atom[atom_data["id"]] in [2331.0, 432.0, 1553.0, 4061.0, 751.0, 2992.0] else False
+    print("Investigating a molecule: ", molecule) if print_condition else None
+    print("Looking at neighbors of atom: ", atom)  if print_condition else None
+    initial_flat = list(flatten(molecule))
     ids = [atom[atom_data["id"]]]
     starting_position = molecule.index(atom[atom_data["type"]])
     to_compare_index = starting_position
     atom_coords = (atom[atom_data["x"]], atom[atom_data["y"]], atom[atom_data["z"]])
-    exclude = [atom[atom_data["id"]]]
+    if exclude == "def":
+        exclude = [atom[atom_data["id"]]]
     #Going backwards
+    print("Going backwards") if print_condition else None
     for i in range(starting_position - 1, -1, -1):
-        closest = find_closest(atom_coords, atom_data, molecule[i], copy_atoms, exclude)
-        if closest:
-            closest_coords = (closest[atom_data["x"]], closest[atom_data["y"]], closest[atom_data["z"]])
-            distance_between = dist(atom_coords, closest_coords, atom_data["box"])
-            if distance_between > cutoffs[molecule[to_compare_index]][molecule[i]]:
-                break
+        print("Searching for neighbors of atom at index: ", to_compare_index)  if print_condition else None
+        if type(molecule[i]) == type(list()):
+            print("The neighbor from the left is a molecule: ", molecule[i]) if print_condition else None
+            neighbor = find_neighbor(atom_coords, molecule[to_compare_index], molecule[i][0], atom_data, copy_atoms, exclude, cutoffs)
+            if neighbor:
+                print("Found the attaching atom: ", neighbor["id"]) if print_condition else None
+                atom_coords = neighbor["coords"]
+                found_molecule = find_molecule(molecule[i], next((x for x in copy_atoms if x[atom_data["id"]] == neighbor["id"]), None), atom_data, cutoffs, copy_atoms, chain, exclude)
+                if found_molecule["ids"]:
+                    print("Found the intersticial molecule with ids: ", found_molecule["ids"]) if print_condition else None
+                    ids += found_molecule["ids"]
+                    copy_atoms = found_molecule["copy_atoms"]
+                    molecule[i] = molecule[i][0]
+                else:
+                    print("Molecule not found ;(") if print_condition else None
+                    break
+                to_compare_index -= 1
+                continue
             else:
-                ids.append(closest[atom_data["id"]])
-                exclude.append(closest[atom_data["id"]])
+                print("Attaching atom not found ;(") if print_condition else None
+                break
+            
+
+        print("(after moltest)Looking for a neighbor for atom of type: ", molecule[to_compare_index]) if print_condition else None
+        neighbor = find_neighbor(atom_coords, molecule[to_compare_index], molecule[i], atom_data, copy_atoms, exclude, cutoffs)
+        if neighbor:
+            print("Found the neighbor: ", neighbor["id"])  if print_condition else None
+            ids.append(neighbor["id"])
+            atom_coords = neighbor["coords"]
             to_compare_index -= 1
-            atom_coords = closest_coords
         else:
+            print("Cound not find the neighbor") if print_condition else None
             break
         
     #Going forward
+    print("Going forward") if print_condition else None
     to_compare_index = starting_position
+    atom_coords = (atom[atom_data["x"]], atom[atom_data["y"]], atom[atom_data["z"]])
     for i in range(starting_position + 1, len(molecule)):
-        closest = find_closest(atom_coords, atom_data, molecule[i], copy_atoms, exclude)
-        if closest:
-            closest_coords = (closest[atom_data["x"]], closest[atom_data["y"]], closest[atom_data["z"]])
-            distance_between = dist(atom_coords, closest_coords, atom_data["box"])
-            if distance_between > cutoffs[molecule[to_compare_index]][molecule[i]]:
-                break
+        print("Searching for neighbors of atom at index: ", to_compare_index) if print_condition else None 
+        if type(molecule[i]) == type(list()):
+            print("The neighbor from the right is a molecule: ", molecule[i]) if print_condition else None
+            neighbor = find_neighbor(atom_coords, molecule[to_compare_index], molecule[i][0], atom_data, copy_atoms, exclude, cutoffs)
+            if neighbor:
+                print("Found the attaching atom: ", neighbor["id"]) if print_condition else None
+                atom_coords = neighbor["coords"]
+                found_molecule = find_molecule(molecule[i], next((x for x in copy_atoms if x[atom_data["id"]] == neighbor["id"]), None), atom_data, cutoffs, copy_atoms, chain, exclude)
+                if found_molecule["ids"]:
+                    print("Found the intersticial molecule with ids: ", found_molecule["ids"]) if print_condition else None
+                    ids += found_molecule["ids"]
+                    copy_atoms = found_molecule["copy_atoms"]
+                    molecule[i] = molecule[i][0]
+                else:
+                    print("Molecule not found ;(") if print_condition else None
+                    break
+                to_compare_index += 1
+                continue
             else:
-                ids.append(closest[atom_data["id"]])
-                exclude.append(closest[atom_data["id"]])
+                print("Attaching atom not found ;(") if print_condition else None
+                break
+            
+
+        print("(after moltest)Looking for a neighbor for atom of type: ", molecule[to_compare_index]) if print_condition else None
+        neighbor = find_neighbor(atom_coords, molecule[to_compare_index], molecule[i], atom_data, copy_atoms, exclude, cutoffs)
+        if neighbor:
+            print("Found the neighbor: ", neighbor["id"])  if print_condition else None
+            ids.append(neighbor["id"])
+            atom_coords = neighbor["coords"]
             to_compare_index += 1
-            atom_coords = closest_coords
         else:
+            print("Cound not find the neighbor") if print_condition else None
             break
 
 
     result = {"ids":[], "copy_atoms":copy_atoms}
-    if len(molecule) == len(ids):
+    if len(initial_flat) == len(ids):
         result["ids"] = ids
         if not chain:
             result["copy_atoms"] = list(filter(lambda x: False if x[atom_data["id"]] in ids else False, copy_atoms))
