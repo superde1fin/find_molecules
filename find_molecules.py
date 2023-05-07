@@ -80,17 +80,14 @@ def read_input():
     mol_num = int(input("Enter the number of molecules you wish to highlight: "))
     molecules = list()
     cutoffs_list = list()
+    print("\nA space-separated sequence of types on one line will be treated as a separate atom chain within the main one. To specify the anchor atom put the ampersand in front of the type (1 &2 1).")
     for i in range(mol_num):
         cutoffs = dict()
         molecules.append(list())
-        print(f"Enter the types of atoms in the molecule {i+1}. When done enter 0")
+        print(f"\nEnter the types of atoms in the molecule {i+1}. When done enter 0")
         done = False
         while not done:
             str_input = input("Type: ")
-#            try:
-#                answ = int(str_input)
-#            except:
-#                answ = list(map(int, str_input.split()))
             if " " in str_input:
                 answ = str_input.split()
             else:
@@ -124,7 +121,6 @@ def read_input():
     return {"molecules": molecules, "cutoffs": cutoffs_list}
 
 def get_molecules_ids(to_leave, atom_data):
-    print()
     ids_toleave = []
     molecules = to_leave["molecules"]
     for i, molecule in enumerate(molecules):
@@ -133,8 +129,8 @@ def get_molecules_ids(to_leave, atom_data):
         molecule = molecule[:-1]
         copy_atoms = atom_data["atoms"].copy()
         for line in atom_data["atoms"]:
-            if molecule and line[atom_data["type"]] == list(flatten(molecule))[0]:
-                molecule_found = find_molecule(copy.deepcopy(molecule), line, atom_data, to_leave["cutoffs"][i], copy_atoms) 
+            if molecule and line[atom_data["type"]] in molecule:
+                molecule_found = find_molecule(copy.deepcopy(molecule), line, atom_data, to_leave["cutoffs"][i], copy_atoms, molecule.index(line[atom_data["type"]])) 
                 ids_toleave += molecule_found
                 if molecule_found:
                     mol_counter += 1
@@ -170,13 +166,16 @@ def extract_anchor(molecule):
         if "&" in el:
             pos = i
     if pos == "default":
-        return 0, []
+        return 0, molecule
     new_molecule = copy.deepcopy(molecule)
     new_molecule[pos] = new_molecule[pos].replace("&", "")
     return pos, new_molecule
 
-
-def find_molecule(molecule, atom, atom_data, cutoffs, copy_atoms, exclude = []):
+def find_molecule(molecule, atom, atom_data, cutoffs, copy_atoms, rel_position, exclude = []):
+#    print("Molecule: ", molecule)
+#    print("Atom: ", atom)
+#    print("Relative position: ", rel_position)
+    molecule_ids = [atom[atom_data["id"]]]
     #Setup the list of atoms that have already been found
     if not exclude:
         exclude = [atom[atom_data["id"]]]
@@ -184,41 +183,68 @@ def find_molecule(molecule, atom, atom_data, cutoffs, copy_atoms, exclude = []):
     initial_flat = list(flatten(molecule))
     if len(initial_flat) == 1:
         return [atom[atom_data["id"]]]
-    #Case where the the first atom position is ocupied by another molecule
-    if type(molecule[0]) == type(list()):
-        pos, new_mol = extract_anchor(molecule[0])
-        inter_mol = find_molecule(new_mol, atom, atom_data, cutoffs, copy_atoms, exclude)
-        #If could not find the inner molecule, than the outer one does not exist also
-        if not inter_mol:
+    if type(molecule[rel_position]) == type(list()):
+        anchor_position, clean_molecule = extract_anchor(molecule[rel_position])
+        inner_molecule = find_molecule(clean_molecule, atom, atom_data, cutoffs, copy_atoms, anchor_position, exclude)
+        if not inner_molecule:
+            #Inner molecule not found so the molecule dne
             return []
-        #Else find start searching for the molecule in which the inner one was replaced by its anchor atom
-        found_molecule = find_molecule([new_mol[pos]] + molecule[1:], atom, atom_data, cutoffs, copy_atoms, exclude)
-        #Maybe the inner molecule ocupied the only atom position
+        #Inner molecule found
+        found_molecule = find_molecule(molecule[:rel_position] + [clean_molecule[anchor_position]] + molecule[rel_position + 1:], atom, atom_data, cutoffs, copy_atoms, rel_position, exclude)
         if len(molecule) > 1 and not found_molecule:
             return []
         else:
             #Return the ids of the inner molecule and the outer one
-            return inter_mol + found_molecule
+            return list(set(inner_molecule + found_molecule))
+
     else:
         #First atom position is ocupied by an atom
         atom_coords = (atom[atom_data["x"]], atom[atom_data["y"]], atom[atom_data["z"]])
-        if type(molecule[1]) == type(list()):
-            #Next neighbor is a molecule then check the bond between the current one and the anchor of that molecule
-            pos, new_mol = extract_anchor(molecule[1])
-            neighbors = find_neighbor(atom_coords, molecule[0], new_mol[pos], atom_data, copy_atoms, exclude, cutoffs)
+        #Going forward
+        if len(molecule) - 1 > rel_position:
+            if type(molecule[rel_position + 1]) == type(list()):
+                #Next spot to the right is a molecule
+                anchor_position, clean_molecule = extract_anchor(molecule[rel_position + 1])
+                neighbors = find_neighbor(atom_coords, molecule[rel_position], clean_molecule[anchor_position], atom_data, copy_atoms, exclude, cutoffs)
+            else:
+                #Next position is an atom
+                neighbors = find_neighbor(atom_coords, molecule[rel_position], molecule[rel_position + 1], atom_data, copy_atoms, exclude, cutoffs)
+            #For each possible neighbor at the current step recursively look for the molecule as if the neighbor was the correct choice
+            for neighbor in neighbors:
+                exclude.append(neighbor)
+                found_molecule = find_molecule(molecule[rel_position + 1:], next((x for x in copy_atoms if x[atom_data["id"]] == neighbor), None), atom_data, cutoffs, copy_atoms, 0,  exclude)
+                if found_molecule:
+                    #Molecule on the right exists
+                    molecule_ids += found_molecule
+                    break
+                else:
+                    #Right part of the molecule not found, so the whole molecule dne
+                    return []
+        if rel_position > 0:
+            if type(molecule[rel_position - 1]) == type(list()):
+                #Next spot to the left is a molecule
+                anchor_position, clean_molecule = extract_anchor(molecule[rel_position - 1])
+                neighbors = find_neighbor(atom_coords, molecule[rel_position], clean_molecule[anchor_position], atom_data, copy_atoms, exclude, cutoffs)
+            else:
+                #Next position is an atom
+                neighbors = find_neighbor(atom_coords, molecule[rel_position], molecule[rel_position - 1], atom_data, copy_atoms, exclude, cutoffs)
+            #For each possible neighbor at the current step recursively look for the molecule as if the neighbor was the correct choice
+            for neighbor in neighbors:
+                exclude.append(neighbor)
+                found_molecule = find_molecule(molecule[:rel_position], next((x for x in copy_atoms if x[atom_data["id"]] == neighbor), None), atom_data, cutoffs, copy_atoms, rel_position - 1,  exclude)
+                if found_molecule:
+                    #Molecule on the right exists
+                    molecule_ids += found_molecule
+                    break
+                else:
+                    #Left part of the molecule not found, so the whole molecule dne
+                    return []
+#        print("IDS: ", molecule_ids, "Molecule: ", molecule)
+        if len(molecule_ids) != len(list(flatten(molecule))):
+            return []
         else:
-            #Next neighbor is an atom
-            neighbors = find_neighbor(atom_coords, molecule[0], molecule[1], atom_data, copy_atoms, exclude, cutoffs)
-        #For each possible neighbor at the current step recursively look for the molecule as if the neighbor was the correct choice
-        for neighbor in neighbors:
-            exclude.append(neighbor)
-            found_molecule = find_molecule(molecule[1:], next((x for x in copy_atoms if x[atom_data["id"]] == neighbor), None), atom_data, cutoffs, copy_atoms, exclude)
-            #If a full molecule was found then the choice was correc; return the ids
-            if found_molecule:
-                return [atom[atom_data["id"]]] + found_molecule
-            exclude.pop()
-        #If no molecule was found at the end, then this branch itself was started with an incorrect neighbor; return nothing
-        return []
+            return molecule_ids
+
         
 
 def find_closest(atom, atom_data, atom_type, copy_atoms, exclude):
